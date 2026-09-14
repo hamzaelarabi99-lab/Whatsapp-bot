@@ -2,10 +2,12 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    Browsers
 } = require('@whiskeysockets/baileys');
 const fs = require('fs');
 
+const phoneNumber = "212710530141"; 
 const authFolder = 'auth_info_baileys';
 
 // إدارة قاعدة البيانات
@@ -29,8 +31,20 @@ async function connectToWhatsApp() {
         version,
         printQRInTerminal: false,
         auth: state,
-        browser: ["macOS", "Safari", "17.0"]
+        browser: Browsers.ubuntu("Chrome")
     });
+
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                let code = await sock.requestPairingCode(phoneNumber);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(`\n========================================\n PAIRING CODE: ${code} \n========================================\n`);
+            } catch (err) {
+                console.error("خطأ أثناء طلب الرمز:", err?.message || err);
+            }
+        }, 5000);
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -38,11 +52,15 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log('إعادة الاتصال...', shouldReconnect);
-            if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 3000);
+            console.log('توقف الاتصال، رمز الحالة:', statusCode);
+            
+            // في حال وجود خلل بالجلسة السابقة يتم إنشاؤها من جديد
+            if (statusCode === 401 || statusCode === 428) {
+                if (fs.existsSync(authFolder)) {
+                    try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch (e) {}
+                }
             }
+            setTimeout(connectToWhatsApp, 5000);
         } else if (connection === 'open') {
             console.log('تم الاتصال بالواتساب بنجاح!');
         }
@@ -98,3 +116,4 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
+                    
