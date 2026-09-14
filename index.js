@@ -4,10 +4,9 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
-const pino = require('pino');
 const fs = require('fs');
 
-// رقم الهاتف بصيغة دولية بدون + أو مسافات
+// رقم هاتفك بالصيغة الدولية
 const phoneNumber = "212771007810"; 
 
 // إدارة قاعدة البيانات المحلية (database.json)
@@ -34,13 +33,12 @@ async function connectToWhatsApp() {
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }),
-        printQRInTerminal: false, // إيقاف QR code
+        printQRInTerminal: false,
         auth: state,
         browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
-    // طلب رمز الاقتران تلقائياً في حال عدم وجود جلسة مسجلة
+    // طلب رمز الاقتران تلقائياً عند تشغيل البوت لأول مرة
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
             let code = await sock.requestPairingCode(phoneNumber);
@@ -71,7 +69,6 @@ async function connectToWhatsApp() {
             if (!msg.message || msg.key.fromMe) return;
 
             const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
             const sender = msg.key.participant || msg.key.remoteJid;
             const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
@@ -80,23 +77,19 @@ async function connectToWhatsApp() {
             const args = text.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
 
-            // إعداد بيانات المستخدم في قاعدة البيانات
             if (!db.users[sender]) {
                 db.users[sender] = { points: 0, trophies: 0 };
             }
 
-            // أمر المساعدة والتعريف
             if (command === 'help' || command === 'الاوامر') {
                 await sock.sendMessage(from, { 
                     text: `🏆 *أوامر البوت* 🏆\n\n` +
                           `• *!نقاطي* : لعرض رصيدك من النقاط والكؤوس\n` +
                           `• *!كأس* : لإضافة كأس للمستخدم\n` +
-                          `• *!نقطة* : لإضافة نقاط للمستخدم\n` +
-                          `• *!ترتيب* : لعرض قائمة المتصدرين`
+                          `• *!نقطة* : لإضافة نقاط للمستخدم`
                 });
             }
 
-            // أمر عرض النقاط
             if (command === 'نقاطي' || command === 'points') {
                 const userPoints = db.users[sender].points;
                 const userTrophies = db.users[sender].trophies;
@@ -105,7 +98,6 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // أمر إضافة نقاط
             if (command === 'نقطة' || command === 'addpoint') {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 const target = mentioned[0] || sender;
@@ -119,7 +111,6 @@ async function connectToWhatsApp() {
                 });
             }
 
-            // أمر إضافة كأس
             if (command === 'كأس' || command === 'addtrophy') {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
                 const target = mentioned[0] || sender;
@@ -140,4 +131,4 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
-          
+        
