@@ -1,3 +1,16 @@
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Simple HTTP server to keep Railway container active
+app.get('/', (req, res) => {
+    res.send('WhatsApp Bot is active and running!');
+});
+
+app.listen(port, () => {
+    console.log(`Web server running on port ${port}`);
+});
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -203,4 +216,4 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
-                
+               
