@@ -3,21 +3,23 @@ const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
-const qrcode = require('qrcode-terminal');
 
-// 1. إعداد سيرفر Express لمنع إيقاف Railway للبوت
+// رقم الهاتف المخصص للبوت
+const phoneNumber = "212710530141"; 
+
+// 1. خادم ويب لإبقاء البوت نشطاً على Railway
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-    res.send('WhatsApp Bot is active and running 24/7!');
+    res.send('WhatsApp Bot is running with Pairing Code!');
 });
 
 app.listen(PORT, () => {
-    console.log(`🌐 Web server is listening on port ${PORT}`);
+    console.log(`🌐 Server active on port ${PORT}`);
 });
 
-// 2. إدارة قاعدة البيانات المحلية
+// 2. إدارة قاعدة البيانات
 const dbPath = path.join(__dirname, 'database.json');
 let db = { users: {} };
 
@@ -25,7 +27,7 @@ if (fs.existsSync(dbPath)) {
     try {
         db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
     } catch (e) {
-        console.error('Error reading database file:', e);
+        console.error('Error reading database:', e);
     }
 }
 
@@ -33,7 +35,7 @@ function saveDB() {
     try {
         fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
     } catch (e) {
-        console.error('Error saving database file:', e);
+        console.error('Error saving database:', e);
     }
 }
 
@@ -45,7 +47,7 @@ function getUser(jid) {
     return db.users[jid];
 }
 
-// 3. الاتصال بالواتساب
+// 3. الاتصال برقم الهاتف واستخراج كود الربط
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
@@ -55,15 +57,22 @@ async function connectToWhatsApp() {
         browser: ['Ubuntu', 'Chrome', '20.0.04']
     });
 
+    // طلب رمز الربط المكون من 8 أرقام إذا لم تكن الجلسة مسجلة بعد
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log(`\n=================================\n🔑 YOUR PAIRING CODE: ${code}\n=================================\n`);
+            } catch (err) {
+                console.error('Failed to request pairing code:', err);
+            }
+        }, 3000);
+    }
+
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // طباعة الـ QR في التيرمينال عند الحاجة
-        if (qr) {
-            qrcode.generate(qr, { small: true });
-        }
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -97,12 +106,10 @@ async function connectToWhatsApp() {
             const isGroup = from.endsWith('@g.us');
             const sender = isGroup ? (msg.key.participant || msg.participant) : from;
 
-            console.log(`[MESSAGE] From: ${from} | Sender: ${sender} | Text: ${text}`);
-
             const args = text.split(/\s+/);
             const command = args[0].toLowerCase();
 
-            // الأوامر العامة
+            // قائمة الأوامر
             if (['!help', '!commands', '!menu', '!الاوامر'].includes(command)) {
                 const helpText = `📌 *قائمة الأوامر المتاحة:*
 
@@ -121,14 +128,12 @@ async function connectToWhatsApp() {
                 await sock.sendMessage(from, { text: helpText }, { quoted: msg });
             }
 
-            // عرض النقاط
             else if (['!mypts', '!points', '!mypoints', '!نقاطي'].includes(command)) {
                 const user = getUser(sender);
                 const reply = `📊 *بياناتك الشخصية:*\n\n⭐ النقاط: *${user.points}*\n🏆 الكؤوس: *${user.trophies}*`;
                 await sock.sendMessage(from, { text: reply }, { quoted: msg });
             }
 
-            // قائمة الترتيب
             else if (['!top', '!leaderboard', '!ترتيب'].includes(command)) {
                 const sortedUsers = Object.entries(db.users)
                     .sort((a, b) => (b[1].trophies - a[1].trophies) || (b[1].points - a[1].points))
@@ -151,7 +156,6 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // إضافة نقاط
             else if (['!point', '!addpoint', '!نقطة'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) {
@@ -169,7 +173,6 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // إضافة كؤوس
             else if (['!trophy', '!givecoupe', '!addtrophy', '!coupe', '!كأس'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) {
@@ -187,7 +190,6 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // خصم نقاط
             else if (['!removepoint', '!deductpoint', '!خصم_نقطة'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) return;
@@ -202,7 +204,6 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // خصم كؤوس
             else if (['!removetrophy', '!removecoupe', '!خصم_كأس'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) return;
@@ -217,7 +218,6 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // تصفير حساب
             else if (['!reset', '!تصفير'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) return;
@@ -227,7 +227,7 @@ async function connectToWhatsApp() {
                 saveDB();
 
                 await sock.sendMessage(from, { 
-                    text: `إعادت تصفير نقاط وكؤوس @${mentioned.split('@')[0]} بنجاح.`,
+                    text: `تم إعادة تصفير نقاط وكؤوس @${mentioned.split('@')[0]} بنجاح.`,
                     mentions: [mentioned]
                 }, { quoted: msg });
             }
@@ -239,4 +239,4 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
-            
+                    
