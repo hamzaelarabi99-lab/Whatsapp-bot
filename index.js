@@ -10,7 +10,7 @@ const fs = require('fs');
 const authFolder = 'auth_info_baileys';
 const dbFile = './database.json';
 
-// تحميل وتحديث قاعدة البيانات
+// Load and initialize database
 let db = { users: {} };
 if (fs.existsSync(dbFile)) {
     try { db = JSON.parse(fs.readFileSync(dbFile)); } catch (e) { db = { users: {} }; }
@@ -50,14 +50,14 @@ async function connectToWhatsApp() {
                 setTimeout(connectToWhatsApp, 3000);
             }
         } else if (connection === 'open') {
-            console.log('تم الاتصال بالواتساب بنجاح!');
+            console.log('WhatsApp Bot Connected Successfully!');
         }
     });
 
     sock.ev.on('messages.upsert', async (m) => {
         try {
             const msg = m.messages[0];
-            if (!msg.message || msg.key.fromMe) return;
+            if (!msg || !msg.message || msg.key.fromMe) return;
 
             const from = msg.key.remoteJid;
             const sender = msg.key.participant || msg.key.remoteJid;
@@ -68,128 +68,159 @@ async function connectToWhatsApp() {
             const args = text.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
 
-            // استخراج العضو المشار إليه (Mentioned) أو صاحب الرسالة
             const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
             const target = mentioned[0] || sender;
             const targetNum = target.split('@')[0];
 
-            // استخراج العدد المحدد في الأمر إن وجد (مثل !نقطة @user 5)
-            const amountInput = args.find(a => !a.includes('@'));
-            const amount = parseInt(amountInput) && parseInt(amountInput) > 0 ? parseInt(amountInput) : 1;
+            // Extract amount or default to 1
+            const amountInput = args.find(a => !a.includes('@') && !isNaN(a));
+            const amount = amountInput ? parseInt(amountInput) : 1;
 
-            // --- الأوامر العامة ---
+            // --- COMMANDS ---
 
-            if (command === 'help' || command === 'الاوامر' || command === 'أوامر') {
-                await sock.sendMessage(from, { 
-                    text: `🏆 *قائمة أوامر البوت الشاملة* 🏆\n\n` +
-                          `📌 *عرض البيانات:*\n` +
-                          `• *!نقاطي* : عرض رصيدك الشخصي\n` +
-                          `• *!معلومات* / *!info* (@عضو) : عرض رصيد عضو آخر\n` +
-                          `• *!ترتيب* / *!top* : عرض ترتيب أفضل 10 مشاركين\n\n` +
-                          `➕ *إضافة النقاط والكؤوس:*\n` +
-                          `• *!نقطة* / *!point* (@عضو) (العدد)\n` +
-                          `• *!كأس* / *!coupe* / *!givecoupe* (@عضو) (العدد)\n\n` +
-                          `➖ *الخصم وإعادة الضبط:*\n` +
-                          `• *!خصم_نقطة* (@عضو) (العدد)\n` +
-                          `• *!خصم_كأس* (@عضو) (العدد)\n` +
-                          `• *!تصفير* (@عضو) : إعادة ضبط النقاط لعضو محدد`
-                }, { quoted: msg });
+            if (command === 'help' || command === 'commands' || command === 'menu') {
+                const helpMessage = 
+`╔══════════════════════╗
+║   ⚙️ *BOT COMMAND MENU* ⚙️   
+╚══════════════════════╝
+
+📌 *GENERAL COMMANDS*
+  • *!mypts* / *!points* 
+    └ View your balance
+  • *!info* (@user) 
+    └ Check a user's stats
+  • *!top* / *!leaderboard* 
+    └ Show Top 10 players
+
+➕ *ADD POINTS & TROPHIES*
+  • *!point* / *!addpoint* (@user) [amount]
+    └ Add points
+  • *!trophy* / *!addtrophy* / *!givecoupe* (@user) [amount]
+    └ Add trophies
+
+➖ *DEDUCT & RESET*
+  • *!removepoint* (@user) [amount]
+    └ Deduct points
+  • *!removetrophy* (@user) [amount]
+    └ Deduct trophies
+  • *!reset* (@user) 
+    └ Reset user stats to zero
+
+═════════════════════════
+✨ *Powered by Hamza Store* ✨`;
+
+                await sock.sendMessage(from, { text: helpMessage }, { quoted: msg });
             }
 
-            if (command === 'نقاطي' || command === 'points') {
+            if (command === 'mypts' || command === 'points' || command === 'mypoints') {
                 const u = getUser(sender);
-                await sock.sendMessage(from, { 
-                    text: `👤 *رصيدك الحالي:*\n⭐ النقاط: *${u.points}*\n🏆 الكؤوس: *${u.trophies}*` 
-                }, { quoted: msg });
+                const ptsMessage = 
+`╭─── Archives Stats ───╮
+│ 👤 *Player:* @${sender.split('@')[0]}
+│ 
+│ ⭐ *Points:* ${u.points}
+│ 🏆 *Trophies:* ${u.trophies}
+╰─────────────────────╯`;
+
+                await sock.sendMessage(from, { text: ptsMessage, mentions: [sender] }, { quoted: msg });
             }
 
-            if (command === 'معلومات' || command === 'info' || command === 'enfo') {
+            if (command === 'info' || command === 'userinfo') {
                 const u = getUser(target);
-                await sock.sendMessage(from, { 
-                    text: `📊 *بيانات المستخدم* (@${targetNum}):\n⭐ النقاط: *${u.points}*\n🏆 الكؤوس: *${u.trophies}*`,
-                    mentions: [target]
-                }, { quoted: msg });
+                const infoMessage = 
+`╭─── Player Profile ───╮
+│ 🎮 *Target:* @${targetNum}
+│ 
+│ ⭐ *Points:* ${u.points}
+│ 🏆 *Trophies:* ${u.trophies}
+╰─────────────────────╯`;
+
+                await sock.sendMessage(from, { text: infoMessage, mentions: [target] }, { quoted: msg });
             }
 
-            if (command === 'ترتيب' || command === 'top') {
+            if (command === 'top' || command === 'leaderboard') {
                 const sorted = Object.entries(db.users)
                     .sort((a, b) => (b[1].trophies * 100 + b[1].points) - (a[1].trophies * 100 + a[1].points))
                     .slice(0, 10);
 
                 if (sorted.length === 0) {
-                    await sock.sendMessage(from, { text: `لا توجد بيانات مسجلة بعد.` }, { quoted: msg });
+                    await sock.sendMessage(from, { text: `⚠️ No user data recorded yet.` }, { quoted: msg });
                     return;
                 }
 
-                let leaderBoard = `🏅 *قائمة أفضل 10 متصدرين* 🏅\n\n`;
+                let leaderboardMsg = `🏆 *TOP 10 LEADERBOARD* 🏆\n\n`;
                 const mentionsArr = [];
+
+                const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
                 sorted.forEach(([id, data], index) => {
                     const num = id.split('@')[0];
-                    leaderBoard += `${index + 1}. @${num} ⬅️ 🏆 *${data.trophies}* | ⭐ *${data.points}*\n`;
+                    const medal = medals[index] || '👤';
+                    leaderboardMsg += `${medal} *@${num}*\n   └ 🏆 Trophies: *${data.trophies}* | ⭐ Points: *${data.points}*\n\n`;
                     mentionsArr.push(id);
                 });
 
-                await sock.sendMessage(from, { text: leaderBoard, mentions: mentionsArr }, { quoted: msg });
+                leaderboardMsg += `═════════════════════════`;
+
+                await sock.sendMessage(from, { text: leaderboardMsg, mentions: mentionsArr }, { quoted: msg });
             }
 
-            // --- أوامر الإضافة والخصم ---
-
-            if (command === 'نقطة' || command === 'point' || command === 'addpoint') {
+            if (command === 'point' || command === 'addpoint' || command === 'نقطة') {
                 const u = getUser(target);
                 u.points += amount;
                 saveDB();
                 await sock.sendMessage(from, { 
-                    text: `✅ تمت إضافة +${amount} نقطة لـ @${targetNum}!\nمجموع النقاط: *${u.points}*`,
+                    text: `✅ Added *+${amount}* Point(s) to @${targetNum}!\n\n⭐ Total Points: *${u.points}*`,
                     mentions: [target]
                 }, { quoted: msg });
             }
 
-            if (command === 'كأس' || command === 'coupe' || command === 'givecoupe' || command === 'addtrophy') {
+            if (command === 'trophy' || command === 'givecoupe' || command === 'addtrophy' || command === 'coupe' || command === 'كأس') {
                 const u = getUser(target);
                 u.trophies += amount;
                 saveDB();
                 await sock.sendMessage(from, { 
-                    text: `🏆 تم منح +${amount} كأس لـ @${targetNum}!\nمجموع الكؤوس: *${u.trophies}*`,
+                    text: `🏆 Awarded *+${amount}* Trophy(ies) to @${targetNum}!\n\n🏆 Total Trophies: *${u.trophies}*`,
                     mentions: [target]
                 }, { quoted: msg });
             }
 
-            if (command === 'خصم_نقطة' || command === 'removepoint') {
+            if (command === 'removepoint' || command === 'deductpoint') {
                 const u = getUser(target);
                 u.points = Math.max(0, u.points - amount);
                 saveDB();
                 await sock.sendMessage(from, { 
-                    text: `📉 تم خصم -${amount} نقطة من @${targetNum}!\nالمتبقي: *${u.points}*`,
+                    text: `📉 Deducted *-${amount}* Point(s) from @${targetNum}!\n\n⭐ Remaining Points: *${u.points}*`,
                     mentions: [target]
                 }, { quoted: msg });
             }
 
-            if (command === 'خصم_كأس' || command === 'removecoupe') {
+            if (command === 'removetrophy' || command === 'removecoupe') {
                 const u = getUser(target);
                 u.trophies = Math.max(0, u.trophies - amount);
                 saveDB();
                 await sock.sendMessage(from, { 
-                    text: `📉 تم خصم -${amount} كأس من @${targetNum}!\nالمتبقي: *${u.trophies}*`,
+                    text: `📉 Deducted *-${amount}* Trophy(ies) from @${targetNum}!\n\n🏆 Remaining Trophies: *${u.trophies}*`,
                     mentions: [target]
                 }, { quoted: msg });
             }
 
-            if (command === 'تصفير' || command === 'reset') {
+            if (command === 'reset') {
                 if (db.users[target]) {
                     db.users[target] = { points: 0, trophies: 0 };
                     saveDB();
                     await sock.sendMessage(from, { 
-                        text: `🔄 تم إعادة ضبط نقاط وكؤوس @${targetNum} إلى الصفر.`,
+                        text: `🔄 Successfully reset points and trophies for @${targetNum} to zero.`,
                         mentions: [target]
                     }, { quoted: msg });
                 }
             }
 
         } catch (err) {
-            console.error('خطأ في معالجة الأمر:', err);
+            console.error('Error handling command:', err);
         }
     });
 }
 
 connectToWhatsApp();
+                    
