@@ -8,16 +8,21 @@ const {
 } = require('@whiskeysockets/baileys');
 const fs = require('fs');
 
-// --- 1. إعداد خادم Express وإبقائه نشطاً ---
+// --- 1. خادم الويب الخاص بـ Railway ---
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => {
-    res.send('WhatsApp Bot is active and running 24/7!');
+    res.status(200).send('WhatsApp Bot is Online & Healthy');
 });
 
-app.listen(port, '0.0.0.0', () => {
-    console.log(`Web server running on port ${port}`);
+// الاستجابة لاختبار الصحة الخاصة بـ Railway
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[SERVER] Express Server is running on port ${PORT}`);
 });
 
 // --- 2. إدارة قاعدة البيانات المحلية ---
@@ -27,23 +32,24 @@ const dbFile = './database.json';
 let db = { users: {} };
 
 function loadDB() {
-    if (fs.existsSync(dbFile)) {
-        try { 
-            db = JSON.parse(fs.readFileSync(dbFile, 'utf8')); 
-        } catch (e) { 
-            console.error("خطأ في قراءة ملف قاعدة البيانات:", e);
-            db = { users: {} }; 
+    try {
+        if (fs.existsSync(dbFile)) {
+            const rawData = fs.readFileSync(dbFile, 'utf8');
+            db = JSON.parse(rawData);
+        } else {
+            saveDB();
         }
-    } else {
-        saveDB();
+    } catch (e) {
+        console.error("[DB ERROR] Error loading database:", e.message);
+        db = { users: {} };
     }
 }
 
 function saveDB() {
     try {
-        fs.writeFileSync(dbFile, JSON.stringify(db, null, 2));
+        fs.writeFileSync(dbFile, JSON.stringify(db, null, 2), 'utf8');
     } catch (e) {
-        console.error("خطأ في حفظ قاعدة البيانات:", e);
+        console.error("[DB ERROR] Error saving database:", e.message);
     }
 }
 
@@ -54,10 +60,9 @@ function getUser(id) {
     return db.users[id];
 }
 
-// تحميل قاعدة البيانات عند التشغيل
 loadDB();
 
-// --- 3. تشغيل الواتساب ---
+// --- 3. اتصال Baileys الواتساب ---
 async function connectToWhatsApp() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(authFolder);
@@ -76,12 +81,12 @@ async function connectToWhatsApp() {
             const { connection, lastDisconnect } = update;
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                console.log(`تم إغلاق الاتصال، رمز الحالة: ${statusCode}`);
+                console.log(`[BOT] Connection closed. Code: ${statusCode}`);
                 if (statusCode !== DisconnectReason.loggedOut) {
                     setTimeout(connectToWhatsApp, 3000);
                 }
             } else if (connection === 'open') {
-                console.log('WhatsApp Bot Connected Successfully!');
+                console.log('[BOT] WhatsApp Connected Successfully!');
             }
         });
 
@@ -92,7 +97,11 @@ async function connectToWhatsApp() {
 
                 const from = msg.key.remoteJid;
                 const sender = msg.key.participant || msg.key.remoteJid;
-                const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+                
+                // الحصول على نص الرسالة بأمان
+                const text = msg.message.conversation || 
+                             msg.message.extendedTextMessage?.text || 
+                             "";
 
                 if (!text.startsWith('!')) return;
 
@@ -106,7 +115,7 @@ async function connectToWhatsApp() {
                 const amountInput = args.find(a => !a.includes('@') && !isNaN(a));
                 const amount = amountInput ? parseInt(amountInput) : 1;
 
-                // --- COMMANDS ---
+                // --- الأوامر ---
 
                 if (command === 'help' || command === 'commands' || command === 'menu' || command === 'الاوامر') {
                     let menuText = "╔══════════════════════╗\n";
@@ -227,15 +236,16 @@ async function connectToWhatsApp() {
                     }
                 }
 
-            } catch (err) {
-                console.error('Error handling command:', err);
+            } catch (cmdErr) {
+                console.error('[COMMAND ERROR] Error executing command:', cmdErr);
             }
         });
-    } catch (globalErr) {
-        console.error('Global Connection Error:', globalErr);
+
+    } catch (err) {
+        console.error('[FATAL ERROR] Failed to start WhatsApp:', err);
         setTimeout(connectToWhatsApp, 5000);
     }
 }
 
 connectToWhatsApp();
-                        
+                            
