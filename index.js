@@ -10,7 +10,7 @@ const fs = require('fs');
 const authFolder = 'auth_info_baileys';
 const dbFile = './database.json';
 
-// Load and initialize database
+// Load database
 let db = { users: {} };
 if (fs.existsSync(dbFile)) {
     try { db = JSON.parse(fs.readFileSync(dbFile)); } catch (e) { db = { users: {} }; }
@@ -72,97 +72,77 @@ async function connectToWhatsApp() {
             const target = mentioned[0] || sender;
             const targetNum = target.split('@')[0];
 
-            // Extract amount or default to 1
             const amountInput = args.find(a => !a.includes('@') && !isNaN(a));
             const amount = amountInput ? parseInt(amountInput) : 1;
 
             // --- COMMANDS ---
 
-            if (command === 'help' || command === 'commands' || command === 'menu') {
-                const helpMessage = 
-`╔══════════════════════╗
-║   ⚙️ *BOT COMMAND MENU* ⚙️   
-╚══════════════════════╝
+            if (command === 'help' || command === 'commands' || command === 'menu' || command === 'الاوامر') {
+                let menuText = "╔══════════════════════╗\n";
+                menuText += "║   ⚙️ *BOT COMMAND MENU* ⚙️   \n";
+                menuText += "╚══════════════════════╝\n\n";
+                menuText += "📌 *GENERAL COMMANDS*\n";
+                menuText += "  • *!mypts* / *!points*\n";
+                menuText += "  • *!info* (@user)\n";
+                menuText += "  • *!top* / *!leaderboard*\n\n";
+                menuText += "➕ *ADD POINTS & TROPHIES*\n";
+                menuText += "  • *!point* (@user) [amount]\n";
+                menuText += "  • *!trophy* / *!givecoupe* (@user) [amount]\n\n";
+                menuText += "➖ *DEDUCT & RESET*\n";
+                menuText += "  • *!removepoint* (@user) [amount]\n";
+                menuText += "  • *!removetrophy* (@user) [amount]\n";
+                menuText += "  • *!reset* (@user)\n\n";
+                menuText += "═════════════════════════";
 
-📌 *GENERAL COMMANDS*
-  • *!mypts* / *!points* 
-    └ View your balance
-  • *!info* (@user) 
-    └ Check a user's stats
-  • *!top* / *!leaderboard* 
-    └ Show Top 10 players
-
-➕ *ADD POINTS & TROPHIES*
-  • *!point* / *!addpoint* (@user) [amount]
-    └ Add points
-  • *!trophy* / *!addtrophy* / *!givecoupe* (@user) [amount]
-    └ Add trophies
-
-➖ *DEDUCT & RESET*
-  • *!removepoint* (@user) [amount]
-    └ Deduct points
-  • *!removetrophy* (@user) [amount]
-    └ Deduct trophies
-  • *!reset* (@user) 
-    └ Reset user stats to zero
-
-═════════════════════════
-✨ *Powered by Hamza Store* ✨`;
-
-                await sock.sendMessage(from, { text: helpMessage }, { quoted: msg });
+                await sock.sendMessage(from, { text: menuText }, { quoted: msg });
             }
 
-            if (command === 'mypts' || command === 'points' || command === 'mypoints') {
+            if (command === 'mypts' || command === 'points' || command === 'mypoints' || command === 'نقاطي') {
                 const u = getUser(sender);
-                const ptsMessage = 
-`╭─── Archives Stats ───╮
-│ 👤 *Player:* @${sender.split('@')[0]}
-│ 
-│ ⭐ *Points:* ${u.points}
-│ 🏆 *Trophies:* ${u.trophies}
-╰─────────────────────╯`;
+                let ptsText = "╭─── Archives Stats ───╮\n";
+                ptsText += `│ 👤 *Player:* @${sender.split('@')[0]}\n│ \n`;
+                ptsText += `│ ⭐ *Points:* ${u.points}\n`;
+                ptsText += `│ 🏆 *Trophies:* ${u.trophies}\n`;
+                ptsText += "╰─────────────────────╯";
 
-                await sock.sendMessage(from, { text: ptsMessage, mentions: [sender] }, { quoted: msg });
+                await sock.sendMessage(from, { text: ptsText, mentions: [sender] }, { quoted: msg });
             }
 
-            if (command === 'info' || command === 'userinfo') {
+            if (command === 'info' || command === 'userinfo' || command === 'معلومات') {
                 const u = getUser(target);
-                const infoMessage = 
-`╭─── Player Profile ───╮
-│ 🎮 *Target:* @${targetNum}
-│ 
-│ ⭐ *Points:* ${u.points}
-│ 🏆 *Trophies:* ${u.trophies}
-╰─────────────────────╯`;
+                let infoText = "╭─── Player Profile ───╮\n";
+                infoText += `│ 🎮 *Target:* @${targetNum}\n│ \n`;
+                infoText += `│ ⭐ *Points:* ${u.points}\n`;
+                infoText += `│ 🏆 *Trophies:* ${u.trophies}\n`;
+                infoText += "╰─────────────────────╯";
 
-                await sock.sendMessage(from, { text: infoMessage, mentions: [target] }, { quoted: msg });
+                await sock.sendMessage(from, { text: infoText, mentions: [target] }, { quoted: msg });
             }
 
-            if (command === 'top' || command === 'leaderboard') {
+            if (command === 'top' || command === 'leaderboard' || command === 'ترتيب') {
                 const sorted = Object.entries(db.users)
                     .sort((a, b) => (b[1].trophies * 100 + b[1].points) - (a[1].trophies * 100 + a[1].points))
                     .slice(0, 10);
 
                 if (sorted.length === 0) {
-                    await sock.sendMessage(from, { text: `⚠️ No user data recorded yet.` }, { quoted: msg });
+                    await sock.sendMessage(from, { text: "⚠️ No user data recorded yet." }, { quoted: msg });
                     return;
                 }
 
-                let leaderboardMsg = `🏆 *TOP 10 LEADERBOARD* 🏆\n\n`;
+                let lbMsg = "🏆 *TOP 10 LEADERBOARD* 🏆\n\n";
                 const mentionsArr = [];
-
                 const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
                 sorted.forEach(([id, data], index) => {
                     const num = id.split('@')[0];
                     const medal = medals[index] || '👤';
-                    leaderboardMsg += `${medal} *@${num}*\n   └ 🏆 Trophies: *${data.trophies}* | ⭐ Points: *${data.points}*\n\n`;
+                    lbMsg += `${medal} *@${num}*\n   └ 🏆 Trophies: *${data.trophies}* | ⭐ Points: *${data.points}*\n\n`;
                     mentionsArr.push(id);
                 });
 
-                leaderboardMsg += `═════════════════════════`;
+                lbMsg += "═════════════════════════";
 
-                await sock.sendMessage(from, { text: leaderboardMsg, mentions: mentionsArr }, { quoted: msg });
+                await sock.sendMessage(from, { text: lbMsg, mentions: mentionsArr }, { quoted: msg });
             }
 
             if (command === 'point' || command === 'addpoint' || command === 'نقطة') {
@@ -185,7 +165,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            if (command === 'removepoint' || command === 'deductpoint') {
+            if (command === 'removepoint' || command === 'deductpoint' || command === 'خصم_نقطة') {
                 const u = getUser(target);
                 u.points = Math.max(0, u.points - amount);
                 saveDB();
@@ -195,7 +175,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            if (command === 'removetrophy' || command === 'removecoupe') {
+            if (command === 'removetrophy' || command === 'removecoupe' || command === 'خصم_كأس') {
                 const u = getUser(target);
                 u.trophies = Math.max(0, u.trophies - amount);
                 saveDB();
@@ -205,12 +185,12 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            if (command === 'reset') {
+            if (command === 'reset' || command === 'تصفير') {
                 if (db.users[target]) {
                     db.users[target] = { points: 0, trophies: 0 };
                     saveDB();
                     await sock.sendMessage(from, { 
-                        text: `🔄 Successfully reset points and trophies for @${targetNum} to zero.`,
+                        text: `🔄 Successfully reset stats for @${targetNum} to zero.`,
                         mentions: [target]
                     }, { quoted: msg });
                 }
@@ -223,4 +203,4 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
-                    
+                
