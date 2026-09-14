@@ -2,12 +2,25 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
+const qrcode = require('qrcode-terminal');
 
-// مسار قاعدة البيانات المحلية
+// 1. إعداد سيرفر Express لمنع إيقاف Railway للبوت
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('WhatsApp Bot is active and running 24/7!');
+});
+
+app.listen(PORT, () => {
+    console.log(`🌐 Web server is listening on port ${PORT}`);
+});
+
+// 2. إدارة قاعدة البيانات المحلية
 const dbPath = path.join(__dirname, 'database.json');
-
-// قراءة البيانات من الملف أو إنشائه إن لم يكن موجوداً
 let db = { users: {} };
+
 if (fs.existsSync(dbPath)) {
     try {
         db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
@@ -24,7 +37,6 @@ function saveDB() {
     }
 }
 
-// إنشاء هيكل بيانات المستخدم إن لم يكن موجوداً
 function getUser(jid) {
     if (!db.users[jid]) {
         db.users[jid] = { points: 0, trophies: 0 };
@@ -33,12 +45,12 @@ function getUser(jid) {
     return db.users[jid];
 }
 
+// 3. الاتصال بالواتساب
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
         auth: state,
         browser: ['Ubuntu', 'Chrome', '20.0.04']
     });
@@ -46,7 +58,13 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        // طباعة الـ QR في التيرمينال عند الحاجة
+        if (qr) {
+            qrcode.generate(qr, { small: true });
+        }
+
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed. Reconnecting...', shouldReconnect);
@@ -64,10 +82,8 @@ async function connectToWhatsApp() {
             const msg = messages[0];
             if (!msg || !msg.message) return;
 
-            // تجاهل الرسائل الصادرة من البوت نفسه
             if (msg.key.fromMe) return;
 
-            // استخراج نص الرسالة بجميع الصيغ الممكنة (خاص/مجموعات/ردود)
             const text = (
                 msg.message.conversation ||
                 msg.message.extendedTextMessage?.text ||
@@ -86,7 +102,7 @@ async function connectToWhatsApp() {
             const args = text.split(/\s+/);
             const command = args[0].toLowerCase();
 
-            // 1. أمر المساعدة والأوامر العامة
+            // الأوامر العامة
             if (['!help', '!commands', '!menu', '!الاوامر'].includes(command)) {
                 const helpText = `📌 *قائمة الأوامر المتاحة:*
 
@@ -95,7 +111,7 @@ async function connectToWhatsApp() {
 • *!info @user* - عرض بيانات عضو محدد
 • *!top / !ترتيب* - قائمة أفضل 10 لاعبين
 
-*أوامر الإدارة والتعديل:*
+*أوامر الإدارة:*
 • *!point @user [عدد]* - إضافة نقاط
 • *!trophy @user [عدد]* - إضافة كؤوس
 • *!removepoint @user [عدد]* - خصم نقاط
@@ -105,21 +121,21 @@ async function connectToWhatsApp() {
                 await sock.sendMessage(from, { text: helpText }, { quoted: msg });
             }
 
-            // 2. أمر عرض النقاط الشخصية
+            // عرض النقاط
             else if (['!mypts', '!points', '!mypoints', '!نقاطي'].includes(command)) {
                 const user = getUser(sender);
                 const reply = `📊 *بياناتك الشخصية:*\n\n⭐ النقاط: *${user.points}*\n🏆 الكؤوس: *${user.trophies}*`;
                 await sock.sendMessage(from, { text: reply }, { quoted: msg });
             }
 
-            // 3. أمر عرض الترتيب Top 10
+            // قائمة الترتيب
             else if (['!top', '!leaderboard', '!ترتيب'].includes(command)) {
                 const sortedUsers = Object.entries(db.users)
                     .sort((a, b) => (b[1].trophies - a[1].trophies) || (b[1].points - a[1].points))
                     .slice(0, 10);
 
                 if (sortedUsers.length === 0) {
-                    await sock.sendMessage(from, { text: '⚠️ لا يوجد لاعبون مسجلون في القائمة حتى الآن.' }, { quoted: msg });
+                    await sock.sendMessage(from, { text: '⚠️ لا يوجد لاعبون مسجلون حتى الآن.' }, { quoted: msg });
                     return;
                 }
 
@@ -135,7 +151,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // 4. أمر إضافة نقاط
+            // إضافة نقاط
             else if (['!point', '!addpoint', '!نقطة'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) {
@@ -153,7 +169,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // 5. أمر إضافة كؤوس
+            // إضافة كؤوس
             else if (['!trophy', '!givecoupe', '!addtrophy', '!coupe', '!كأس'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) {
@@ -171,7 +187,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // 6. أمر خصم نقاط
+            // خصم نقاط
             else if (['!removepoint', '!deductpoint', '!خصم_نقطة'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) return;
@@ -186,7 +202,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // 7. أمر خصم كؤوس
+            // خصم كؤوس
             else if (['!removetrophy', '!removecoupe', '!خصم_كأس'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) return;
@@ -201,7 +217,7 @@ async function connectToWhatsApp() {
                 }, { quoted: msg });
             }
 
-            // 8. أمر تصفير الحساب
+            // تصفير حساب
             else if (['!reset', '!تصفير'].includes(command)) {
                 const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!mentioned) return;
@@ -223,4 +239,4 @@ async function connectToWhatsApp() {
 }
 
 connectToWhatsApp();
-                    
+            
