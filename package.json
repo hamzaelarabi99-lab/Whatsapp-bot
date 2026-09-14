@@ -1,13 +1,13 @@
 {
-  "name": "whatsapp-points-bot",
+  "name": "whatsapp-bot",
   "version": "1.0.0",
-  "description": "WhatsApp Group Points and Trophy Bot",
+  "description": "WhatsApp Points & Trophies Management Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.6.0",
-    "qrcode-terminal": "^0.12.0"
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.19.2"
   }
 }
