@@ -2,7 +2,6 @@ import baileysPackage from '@whiskeysockets/baileys';
 import pino from 'pino';
 import fs from 'fs';
 
-// التكيف مع طريقة التصدير الخاصة بالمكتبة
 const makeWASocket = baileysPackage.default || baileysPackage;
 const { useMultiFileAuthState, DisconnectReason } = baileysPackage;
 
@@ -27,7 +26,7 @@ function getUser(db, jid) {
     return db[jid];
 }
 
-let pairingRequested = false;
+let isPairingRequested = false;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -35,7 +34,10 @@ async function startBot() {
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -46,30 +48,33 @@ async function startBot() {
         if (connection === 'close') {
             const statusCode = (lastDisconnect?.error)?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ انقطع الاتصال، جاري إعادة الاتصال...', shouldReconnect);
+            console.log('❌ انقطع الاتصال، جاري إعادة المحاولة بعد 10 ثوانٍ...');
+            isPairingRequested = false;
             if (shouldReconnect) {
-                setTimeout(startBot, 5000);
+                setTimeout(startBot, 10000);
+            }
+        } else if (connection === 'connecting') {
+            console.log('⏳ جاري الاتصال بالسيرفر...');
+            
+            if (!sock.authState.creds.registered && !isPairingRequested) {
+                isPairingRequested = true;
+                setTimeout(async () => {
+                    try {
+                        const code = await sock.requestPairingCode(BOT_OWNER);
+                        console.log(`\n====================================`);
+                        console.log(`📱 الرقم: +${BOT_OWNER}`);
+                        console.log(`🔑 رمز الربط: ${code}`);
+                        console.log(`====================================\n`);
+                    } catch (err) {
+                        console.log('⚠️ خطأ فـ طلب الرمز، كايتسنى المحاولة الجاية...');
+                        isPairingRequested = false;
+                    }
+                }, 10000);
             }
         } else if (connection === 'open') {
             console.log('✅ تم الاتصال بالواتساب بنجاح! البوت جاهز ومستقر.');
         }
     });
-
-    if (!sock.authState.creds.registered && !pairingRequested) {
-        pairingRequested = true;
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(BOT_OWNER);
-                console.log(`\n====================================`);
-                console.log(`📱 الرقم: +${BOT_OWNER}`);
-                console.log(`🔑 رمز الربط: ${code}`);
-                console.log(`====================================\n`);
-            } catch (err) {
-                console.log('خطأ أثناء طلب الرمز، جاري المحاولة من جديد...');
-                pairingRequested = false;
-            }
-        }, 5000);
-    }
 
     // الترحيب بالأعضاء الجدد
     sock.ev.on('group-participants.update', async (update) => {
