@@ -1,242 +1,146 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const fs = require('fs');
-const path = require('path');
-const express = require('express');
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import pino from 'pino';
+import fs from 'fs';
 
-// رقم الهاتف المخصص للبوت
-const phoneNumber = "212710530141"; 
+const BOT_OWNER = '212710530141';
+const DB_FILE = './database.json';
 
-// 1. خادم ويب لإبقاء البوت نشطاً على Railway
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.get('/', (req, res) => {
-    res.send('WhatsApp Bot is running with Pairing Code!');
-});
-
-app.listen(PORT, () => {
-    console.log(`🌐 Server active on port ${PORT}`);
-});
-
-// 2. إدارة قاعدة البيانات
-const dbPath = path.join(__dirname, 'database.json');
-let db = { users: {} };
-
-if (fs.existsSync(dbPath)) {
+function getDB() {
+    if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '{}');
     try {
-        db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-    } catch (e) {
-        console.error('Error reading database:', e);
+        return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
+    } catch {
+        return {};
     }
 }
 
-function saveDB() {
-    try {
-        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-    } catch (e) {
-        console.error('Error saving database:', e);
-    }
+function saveDB(data) {
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-function getUser(jid) {
-    if (!db.users[jid]) {
-        db.users[jid] = { points: 0, trophies: 0 };
-        saveDB();
-    }
-    return db.users[jid];
+function getUser(db, jid) {
+    if (!db[jid]) db[jid] = { cups: 0, points: 0 };
+    return db[jid];
 }
 
-// 3. الاتصال برقم الهاتف واستخراج كود الربط
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+let pairingRequested = false;
+
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ['Ubuntu', 'Chrome', '20.0.04']
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
-
-    // طلب رمز الربط المكون من 8 أرقام إذا لم تكن الجلسة مسجلة بعد
-    if (!sock.authState.creds.registered) {
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(phoneNumber);
-                console.log(`\n=================================\n🔑 YOUR PAIRING CODE: ${code}\n=================================\n`);
-            } catch (err) {
-                console.error('Failed to request pairing code:', err);
-            }
-        }, 3000);
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed. Reconnecting...', shouldReconnect);
+            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log('❌ انقطع الاتصال، جاري إعادة الاتصال...', shouldReconnect);
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(startBot, 5000);
             }
         } else if (connection === 'open') {
-            console.log('✅ WhatsApp Bot Connected Successfully!');
+            console.log('✅ تم الاتصال بالواتساب بنجاح! البوت جاهز ومستقر.');
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        try {
-            if (type !== 'notify') return;
-            const msg = messages[0];
-            if (!msg || !msg.message) return;
-
-            if (msg.key.fromMe) return;
-
-            const text = (
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                msg.message.imageMessage?.caption ||
-                ''
-            ).trim();
-
-            if (!text) return;
-
-            const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
-            const sender = isGroup ? (msg.key.participant || msg.participant) : from;
-
-            const args = text.split(/\s+/);
-            const command = args[0].toLowerCase();
-
-            // قائمة الأوامر
-            if (['!help', '!commands', '!menu', '!الاوامر'].includes(command)) {
-                const helpText = `📌 *قائمة الأوامر المتاحة:*
-
-• *!help / !الاوامر* - عرض القائمة
-• *!mypts / !نقاطي* - عرض نقاطك وكؤوسك
-• *!info @user* - عرض بيانات عضو محدد
-• *!top / !ترتيب* - قائمة أفضل 10 لاعبين
-
-*أوامر الإدارة:*
-• *!point @user [عدد]* - إضافة نقاط
-• *!trophy @user [عدد]* - إضافة كؤوس
-• *!removepoint @user [عدد]* - خصم نقاط
-• *!removetrophy @user [عدد]* - خصم كؤوس
-• *!reset @user* - تصفير حساب عضو`;
-
-                await sock.sendMessage(from, { text: helpText }, { quoted: msg });
+    if (!sock.authState.creds.registered && !pairingRequested) {
+        pairingRequested = true;
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(BOT_OWNER);
+                console.log(`\n====================================`);
+                console.log(`📱 الرقم: +${BOT_OWNER}`);
+                console.log(`🔑 رمز الربط: ${code}`);
+                console.log(`====================================\n`);
+            } catch (err) {
+                console.log('خطأ أثناء طلب الرمز، جاري المحاولة من جديد...');
+                pairingRequested = false;
             }
+        }, 5000);
+    }
 
-            else if (['!mypts', '!points', '!mypoints', '!نقاطي'].includes(command)) {
-                const user = getUser(sender);
-                const reply = `📊 *بياناتك الشخصية:*\n\n⭐ النقاط: *${user.points}*\n🏆 الكؤوس: *${user.trophies}*`;
-                await sock.sendMessage(from, { text: reply }, { quoted: msg });
-            }
-
-            else if (['!top', '!leaderboard', '!ترتيب'].includes(command)) {
-                const sortedUsers = Object.entries(db.users)
-                    .sort((a, b) => (b[1].trophies - a[1].trophies) || (b[1].points - a[1].points))
-                    .slice(0, 10);
-
-                if (sortedUsers.length === 0) {
-                    await sock.sendMessage(from, { text: '⚠️ لا يوجد لاعبون مسجلون حتى الآن.' }, { quoted: msg });
-                    return;
-                }
-
-                let leaderboardText = '🏆 *قائمة أفضل 10 لاعبين:* \n\n';
-                sortedUsers.forEach(([jid, data], index) => {
-                    const phone = jid.split('@')[0];
-                    leaderboardText += `${index + 1}. @${phone} ➔ 🏆 ${data.trophies} | ⭐ ${data.points}\n`;
+    // الترحيب بالأعضاء الجدد
+    sock.ev.on('group-participants.update', async (update) => {
+        const { id, participants, action } = update;
+        if (action === 'add') {
+            for (const participant of participants) {
+                await sock.sendMessage(id, {
+                    text: `مرحباً بك @${participant.split('@')[0]} في المجموعة! 🥳👋`,
+                    mentions: [participant]
                 });
-
-                await sock.sendMessage(from, { 
-                    text: leaderboardText, 
-                    mentions: sortedUsers.map(([jid]) => jid) 
-                }, { quoted: msg });
             }
+        }
+    });
 
-            else if (['!point', '!addpoint', '!نقطة'].includes(command)) {
-                const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-                if (!mentioned) {
-                    await sock.sendMessage(from, { text: '⚠️ يرجى عمل تاغ للمستخدم (مثال: !نقطة @user 5)' }, { quoted: msg });
-                    return;
-                }
-                const amount = parseInt(args[2]) || 1;
-                const user = getUser(mentioned);
-                user.points += amount;
-                saveDB();
+    // الأوامر
+    sock.ev.on('messages.upsert', async (m) => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return;
 
-                await sock.sendMessage(from, { 
-                    text: `✅ تم إضافة *${amount}* نقطة للمستخدم @${mentioned.split('@')[0]}.\n⭐ المجموع الحالي: *${user.points}*`,
-                    mentions: [mentioned]
-                }, { quoted: msg });
+        const from = msg.key.remoteJid;
+        const sender = msg.key.participant || msg.key.remoteJid;
+        const senderNumber = sender.split('@')[0].replace(/[^0-9]/g, '');
+
+        const text = msg.message.conversation ||
+                     msg.message.extendedTextMessage?.text || '';
+
+        const db = getDB();
+
+        if (text.startsWith('!setcoupe')) {
+            if (senderNumber !== BOT_OWNER) {
+                await sock.sendMessage(from, { text: '⚠️ هذا الأمر مخصص لمالك البوت فقط!' });
+                return;
             }
-
-            else if (['!trophy', '!givecoupe', '!addtrophy', '!coupe', '!كأس'].includes(command)) {
-                const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-                if (!mentioned) {
-                    await sock.sendMessage(from, { text: '⚠️ يرجى عمل تاغ للمستخدم (مثال: !كأس @user 1)' }, { quoted: msg });
-                    return;
-                }
-                const amount = parseInt(args[2]) || 1;
-                const user = getUser(mentioned);
-                user.trophies += amount;
-                saveDB();
-
-                await sock.sendMessage(from, { 
-                    text: `🏆 تم منح *${amount}* كأس للمستخدم @${mentioned.split('@')[0]}.\n🏆 المجموع الحالي: *${user.trophies}*`,
-                    mentions: [mentioned]
-                }, { quoted: msg });
-            }
-
-            else if (['!removepoint', '!deductpoint', '!خصم_نقطة'].includes(command)) {
-                const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-                if (!mentioned) return;
-                const amount = parseInt(args[2]) || 1;
-                const user = getUser(mentioned);
-                user.points = Math.max(0, user.points - amount);
-                saveDB();
-
-                await sock.sendMessage(from, { 
-                    text: `📉 تم خصم *${amount}* نقطة من @${mentioned.split('@')[0]}.\n⭐ المجموع الحالي: *${user.points}*`,
-                    mentions: [mentioned]
-                }, { quoted: msg });
-            }
-
-            else if (['!removetrophy', '!removecoupe', '!خصم_كأس'].includes(command)) {
-                const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-                if (!mentioned) return;
-                const amount = parseInt(args[2]) || 1;
-                const user = getUser(mentioned);
-                user.trophies = Math.max(0, user.trophies - amount);
-                saveDB();
-
-                await sock.sendMessage(from, { 
-                    text: `📉 تم خصم *${amount}* كأس من @${mentioned.split('@')[0]}.\n🏆 المجموع الحالي: *${user.trophies}*`,
-                    mentions: [mentioned]
-                }, { quoted: msg });
-            }
-
-            else if (['!reset', '!تصفير'].includes(command)) {
-                const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-                if (!mentioned) return;
-                const user = getUser(mentioned);
-                user.points = 0;
-                user.trophies = 0;
-                saveDB();
-
-                await sock.sendMessage(from, { 
-                    text: `تم إعادة تصفير نقاط وكؤوس @${mentioned.split('@')[0]} بنجاح.`,
-                    mentions: [mentioned]
-                }, { quoted: msg });
-            }
-
-        } catch (error) {
-            console.error('[COMMAND ERROR]:', error);
+            const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            if (mentioned.length === 0) return;
+            const target = mentioned[0];
+            const u = getUser(db, target);
+            u.cups += 1;
+            saveDB(db);
+            await sock.sendMessage(from, { text: `🏆 تم إضافة كأس لـ @${target.split('@')[0]}!`, mentions: [target] });
+        }
+        else if (text.trim() === '!coupe') {
+            const u = getUser(db, sender);
+            await sock.sendMessage(from, { text: `🏆 @${sender.split('@')[0]} لديك: ${u.cups} كأس.`, mentions: [sender] });
+        }
+        else if (text.startsWith('!setpoint')) {
+            if (senderNumber !== BOT_OWNER) return;
+            const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const args = text.trim().split(/\s+/);
+            const amt = args.find(a => !isNaN(a) && a.trim() !== '');
+            if (mentioned.length === 0 || !amt) return;
+            const target = mentioned[0];
+            const u = getUser(db, target);
+            u.points += parseInt(amt, 10);
+            saveDB(db);
+            await sock.sendMessage(from, { text: `⭐ تم إضافة ${amt} نقطة لـ @${target.split('@')[0]}!`, mentions: [target] });
+        }
+        else if (text.trim() === '!point') {
+            const u = getUser(db, sender);
+            await sock.sendMessage(from, { text: `⭐ @${sender.split('@')[0]} لديك: ${u.points} نقطة.`, mentions: [sender] });
+        }
+        else if (text.trim() === '!top') {
+            const entries = Object.entries(db);
+            if (entries.length === 0) return;
+            const sortedByCups = [...entries].sort((a, b) => b[1].cups - a[1].cups).slice(0, 5);
+            let res = '🏆 *المتصدرين في الكؤوس:*\n';
+            let mentions = [];
+            sortedByCups.forEach(([jid, d], i) => {
+                res += `${i + 1}. @${jid.split('@')[0]} 👈 ${d.cups} كأس\n`;
+                mentions.push(jid);
+            });
+            await sock.sendMessage(from, { text: res, mentions });
         }
     });
 }
 
-connectToWhatsApp();
-                    
+startBot();
+                                       
