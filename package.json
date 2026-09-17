@@ -1,16 +1,18 @@
 {
-  "name": "whatsapp-bot",
+  "name": "whatsapp-coupe-point-bot",
   "version": "1.0.0",
+  "description": "WhatsApp group bot for welcome messages, cups, points and leaderboards.",
   "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.8",
-    "pino": "^8.21.0"
-  },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@hapi/boom": "^9.1.3",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "^9.6.0"
   }
 }
