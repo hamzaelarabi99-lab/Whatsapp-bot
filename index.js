@@ -1,149 +1,349 @@
-import baileysPackage from '@whiskeysockets/baileys';
-import pino from 'pino';
 import fs from 'fs';
+import readline from 'readline';
+import pino from 'pino';
+import makeWASocket, {
+  Browsers,
+  DisconnectReason,
+  useMultiFileAuthState
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
 
-const makeWASocket = baileysPackage.default || baileysPackage;
-const { useMultiFileAuthState, DisconnectReason } = baileysPackage;
-
-const BOT_OWNER = '212710530141';
 const DB_FILE = './database.json';
+const AUTH_DIR = './auth_info_baileys';
+const DEFAULT_PHONE = '212710530141';
 
-function getDB() {
-    if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, '{}');
-    try {
-        return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-    } catch {
-        return {};
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+const question = (q) => new Promise((resolve) => rl.question(q, resolve));
+
+function loadDB() {
+  try {
+    if (!fs.existsSync(DB_FILE)) {
+      fs.writeFileSync(DB_FILE, JSON.stringify({ groups: {} }, null, 2));
     }
+    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  } catch (err) {
+    console.error('❌ Error reading database.json:', err);
+    return { groups: {} };
+  }
 }
 
-function saveDB(data) {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+function saveDB(db) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-function getUser(db, jid) {
-    if (!db[jid]) db[jid] = { cups: 0, points: 0 };
-    return db[jid];
+function ensureGroup(db, groupId) {
+  if (!db.groups[groupId]) {
+    db.groups[groupId] = {
+      users: {}
+    };
+  }
+  return db.groups[groupId];
+}
+
+function ensureUser(db, groupId, userId, name = 'عضو') {
+  const group = ensureGroup(db, groupId);
+  if (!group.users[userId]) {
+    group.users[userId] = {
+      name,
+      coupe: 0,
+      point: 0
+    };
+  } else if (name && name !== 'عضو') {
+    group.users[userId].name = name;
+  }
+  return group.users[userId];
+}
+
+function getText(message) {
+  return (
+    message?.conversation ||
+    message?.extendedTextMessage?.text ||
+    message?.imageMessage?.caption ||
+    message?.videoMessage?.caption ||
+    ''
+  ).trim();
+}
+
+function getMentions(message) {
+  return message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+}
+
+function getSender(msg) {
+  return msg.key.participant || msg.key.remoteJid;
+}
+
+function getDisplayName(msg, fallback = 'عضو') {
+  return (
+    msg.pushName ||
+    msg.message?.extendedTextMessage?.contextInfo?.participant ||
+    fallback
+  );
+}
+
+function normalizeId(id) {
+  return id ? id.replace(/:\d+(?=@)/, '') : id;
+}
+
+async function isGroupAdmin(sock, groupId, senderId) {
+  try {
+    const metadata = await sock.groupMetadata(groupId);
+    const sender = normalizeId(senderId);
+    const participant = metadata.participants.find(
+      (p) => normalizeId(p.id) === sender
+    );
+    return participant?.admin === 'admin' || participant?.admin === 'superadmin';
+  } catch {
+    return false;
+  }
+}
+
+function mentionTag(jid) {
+  return `@${jid.split('@')[0].split(':')[0]}`;
+}
+
+function formatTop(db, groupId) {
+  const group = ensureGroup(db, groupId);
+  const users = Object.entries(group.users);
+
+  const coupeTop = [...users]
+    .sort((a, b) => (b[1].coupe || 0) - (a[1].coupe || 0))
+    .slice(0, 10);
+
+  const pointTop = [...users]
+    .sort((a, b) => (b[1].point || 0) - (a[1].point || 0))
+    .slice(0, 10);
+
+  let text = '🏆 *المتصدرين*\n\n';
+  text += '👑 *ترتيب الكؤوس:*\n';
+
+  if (!coupeTop.length) {
+    text += 'لا يوجد أعضاء بعد.\n';
+  } else {
+    coupeTop.forEach(([jid, user], i) => {
+      text += `${i + 1}. ${user.name || mentionTag(jid)} — 🏆 ${user.coupe || 0}\n`;
+    });
+  }
+
+  text += '\n⭐ *ترتيب النقاط:*\n';
+
+  if (!pointTop.length) {
+    text += 'لا يوجد أعضاء بعد.\n';
+  } else {
+    pointTop.forEach(([jid, user], i) => {
+      text += `${i + 1}. ${user.name || mentionTag(jid)} — ⭐ ${user.point || 0}\n`;
+    });
+  }
+
+  return text.trim();
 }
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
-    const sock = makeWASocket({
-        logger: pino({ level: 'silent' }),
-        auth: state,
-        printQRInTerminal: true, // غايطبع ليك QR Code فـ Logs إلا ما تخدمش Pairing Code
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
-    });
+  const sock = makeWASocket({
+    auth: state,
+    browser: Browsers.ubuntu('Coupe Point Bot'),
+    printQRInTerminal: false,
+    logger: pino({ level: 'silent' }),
+    markOnlineOnConnect: false,
+    syncFullHistory: false
+  });
 
-    sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+  let pairingRequested = state.creds.registered;
 
-        if (qr) {
-            console.log('📸 سكان الخانة (QR Code) أو تسنى طلب الرقم...');
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    // No QR is displayed. A WhatsApp pairing code is requested instead.
+    if (qr && !state.creds.registered && !pairingRequested) {
+      pairingRequested = true;
+      try {
+        let phone = DEFAULT_PHONE;
+        console.log(`\n📱 رقم واتساب المضبوط للبوت: +${phone}`);
+        const customPhone = await question('إذا بغيتي تبدل الرقم، دخلو هنا (Enter للاستعمال ديال +212710530141): ');
+        if (customPhone.trim()) phone = customPhone.replace(/\D/g, '');
+
+        if (!phone) {
+          throw new Error('رقم الهاتف غير صالح.');
         }
 
-        if (connection === 'close') {
-            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ انقطع الاتصال، جاري إعادة المحاولة...');
-            if (shouldReconnect) {
-                setTimeout(startBot, 5000);
-            }
-        } else if (connection === 'open') {
-            console.log('✅ تم الاتصال بالواتساب بنجاح! البوت جاهز ومستقر.');
-        }
-    });
-
-    // طلب كود الربط مرة واحدة فقط بشكل مباشر
-    if (!sock.authState.creds.registered) {
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(BOT_OWNER);
-                console.log(`\n====================================`);
-                console.log(`🔑 رمز الربط الخاص بك: ${code}`);
-                console.log(`====================================\n`);
-            } catch (err) {
-                console.log('⚠️ الواتساب حظر طلب الكود مؤقتاً، استعمل الـ QR Code المطبوع فـ السجل.');
-            }
-        }, 6000);
+        const code = await sock.requestPairingCode(phone);
+        console.log('\n🔐 كود الربط مع واتساب:', code);
+        console.log('📲 في واتساب: الأجهزة المرتبطة → ربط جهاز → الربط برقم الهاتف، ثم دخل الكود.\n');
+      } catch (err) {
+        console.error('❌ تعذر إنشاء كود الربط:', err?.message || err);
+        pairingRequested = false;
+      }
     }
 
-    // الترحيب بالأعضاء الجدد
-    sock.ev.on('group-participants.update', async (update) => {
-        const { id, participants, action } = update;
-        if (action === 'add') {
-            for (const participant of participants) {
-                await sock.sendMessage(id, {
-                    text: `مرحباً بك @${participant.split('@')[0]} في المجموعة! 🥳👋`,
-                    mentions: [participant]
-                });
-            }
+    if (connection === 'open') {
+      console.log('✅ البوت متصل بواتساب بنجاح!');
+    }
+
+    if (connection === 'close') {
+      const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+      console.log(
+        `⚠️ الاتصال تسد. إعادة الاتصال: ${shouldReconnect ? 'نعم' : 'لا'}`
+      );
+
+      if (shouldReconnect) {
+        setTimeout(startBot, 3000);
+      } else {
+        console.log('🔒 تم تسجيل الخروج. احذف مجلد auth_info_baileys إذا أردت ربط رقم جديد.');
+      }
+    }
+  });
+
+  // Welcome new members.
+  sock.ev.on('group-participants.update', async (update) => {
+    if (update.action !== 'add') return;
+
+    try {
+      const mentions = update.participants || [];
+      if (!mentions.length) return;
+
+      const names = mentions.map(mentionTag).join(' و ');
+      await sock.sendMessage(update.id, {
+        text:
+          `🎉 *مرحبا بيك فالمجموعة!*\n\n` +
+          `أهلا ${names} 👋\n` +
+          `🏆 الكؤوس: !coupe\n` +
+          `⭐ النقاط: !point\n` +
+          `🏅 المتصدرين: !top`,
+        mentions
+      });
+
+      const db = loadDB();
+      for (const jid of mentions) {
+        ensureUser(db, update.id, jid, 'عضو');
+      }
+      saveDB(db);
+    } catch (err) {
+      console.error('❌ Welcome error:', err?.message || err);
+    }
+  });
+
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    for (const msg of messages) {
+      try {
+        if (!msg.message || msg.key.fromMe) continue;
+
+        const jid = msg.key.remoteJid;
+        if (!jid || !jid.endsWith('@g.us')) continue;
+
+        const text = getText(msg);
+        if (!text.startsWith('!')) continue;
+
+        const parts = text.split(/\s+/);
+        const command = parts[0].toLowerCase();
+        const mentions = getMentions(msg);
+        const sender = getSender(msg);
+
+        const db = loadDB();
+
+        // !coupe
+        if (command === '!coupe') {
+          const user = ensureUser(db, jid, sender, msg.pushName || 'عضو');
+          saveDB(db);
+
+          await sock.sendMessage(jid, {
+            text: `🏆 ${user.name || mentionTag(sender)} عندو *${user.coupe || 0}* كؤوس.`,
+            mentions: [sender]
+          }, { quoted: msg });
+
+          continue;
         }
-    });
 
-    // الأوامر
-    sock.ev.on('messages.upsert', async (m) => {
-        const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        // !point
+        if (command === '!point') {
+          const user = ensureUser(db, jid, sender, msg.pushName || 'عضو');
+          saveDB(db);
 
-        const from = msg.key.remoteJid;
-        const sender = msg.key.participant || msg.key.remoteJid;
-        const senderNumber = sender.split('@')[0].replace(/[^0-9]/g, '');
+          await sock.sendMessage(jid, {
+            text: `⭐ ${user.name || mentionTag(sender)} عندو *${user.point || 0}* نقطة.`,
+            mentions: [sender]
+          }, { quoted: msg });
 
-        const text = msg.message.conversation ||
-                     msg.message.extendedTextMessage?.text || '';
+          continue;
+        }
 
-        const db = getDB();
+        // !top
+        if (command === '!top') {
+          await sock.sendMessage(jid, {
+            text: formatTop(db, jid)
+          }, { quoted: msg });
 
-        if (text.startsWith('!setcoupe')) {
-            if (senderNumber !== BOT_OWNER) {
-                await sock.sendMessage(from, { text: '⚠️ هذا الأمر مخصص لمالك البوت فقط!' });
-                return;
-            }
-            const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-            if (mentioned.length === 0) return;
-            const target = mentioned[0];
-            const u = getUser(db, target);
-            u.cups += 1;
+          continue;
+        }
+
+        // Admin-only commands
+        if (command === '!setcoupe' || command === '!setpoint') {
+          const admin = await isGroupAdmin(sock, jid, sender);
+          if (!admin) {
+            await sock.sendMessage(jid, {
+              text: '⛔ هاد الأمر غير متاح غير لأدمن المجموعة.'
+            }, { quoted: msg });
+            continue;
+          }
+
+          if (!mentions.length) {
+            await sock.sendMessage(jid, {
+              text:
+                command === '!setcoupe'
+                  ? '❌ منشن الشخص مع الأمر: !setcoupe @الشخص'
+                  : '❌ منشن الشخص والكمية: !setpoint @الشخص 50'
+            }, { quoted: msg });
+            continue;
+          }
+
+          const target = mentions[0];
+          const user = ensureUser(db, jid, target, 'عضو');
+
+          if (command === '!setcoupe') {
+            user.coupe = (user.coupe || 0) + 1;
             saveDB(db);
-            await sock.sendMessage(from, { text: `🏆 تم إضافة كأس لـ @${target.split('@')[0]}!`, mentions: [target] });
-        }
-        else if (text.trim() === '!coupe') {
-            const u = getUser(db, sender);
-            await sock.sendMessage(from, { text: `🏆 @${sender.split('@')[0]} لديك: ${u.cups} كأس.`, mentions: [sender] });
-        }
-        else if (text.startsWith('!setpoint')) {
-            if (senderNumber !== BOT_OWNER) return;
-            const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-            const args = text.trim().split(/\s+/);
-            const amt = args.find(a => !isNaN(a) && a.trim() !== '');
-            if (mentioned.length === 0 || !amt) return;
-            const target = mentioned[0];
-            const u = getUser(db, target);
-            u.points += parseInt(amt, 10);
+
+            await sock.sendMessage(jid, {
+              text: `🏆 تمت إضافة *كأس واحد* إلى ${mentionTag(target)}.\nالمجموع: *${user.coupe}* كؤوس.`,
+              mentions: [target]
+            }, { quoted: msg });
+          } else {
+            const amount = Number(parts.find((p) => /^\d+$/.test(p)));
+            if (!Number.isInteger(amount) || amount <= 0) {
+              await sock.sendMessage(jid, {
+                text: '❌ مثال صحيح: !setpoint @الشخص 50'
+              }, { quoted: msg });
+              continue;
+            }
+
+            user.point = (user.point || 0) + amount;
             saveDB(db);
-            await sock.sendMessage(from, { text: `⭐ تم إضافة ${amt} نقطة لـ @${target.split('@')[0]}!`, mentions: [target] });
+
+            await sock.sendMessage(jid, {
+              text: `⭐ تمت إضافة *${amount} نقطة* إلى ${mentionTag(target)}.\nالمجموع: *${user.point}* نقطة.`,
+              mentions: [target]
+            }, { quoted: msg });
+          }
+
+          continue;
         }
-        else if (text.trim() === '!point') {
-            const u = getUser(db, sender);
-            await sock.sendMessage(from, { text: `⭐ @${sender.split('@')[0]} لديك: ${u.points} نقطة.`, mentions: [sender] });
-        }
-        else if (text.trim() === '!top') {
-            const entries = Object.entries(db);
-            if (entries.length === 0) return;
-            const sortedByCups = [...entries].sort((a, b) => b[1].cups - a[1].cups).slice(0, 5);
-            let res = '🏆 *المتصدرين في الكؤوس:*\n';
-            let mentions = [];
-            sortedByCups.forEach(([jid, d], i) => {
-                res += `${i + 1}. @${jid.split('@')[0]} 👈 ${d.cups} كأس\n`;
-                mentions.push(jid);
-            });
-            await sock.sendMessage(from, { text: res, mentions });
-        }
-    });
+      } catch (err) {
+        console.error('❌ Message handler error:', err?.message || err);
+      }
+    }
+  });
 }
 
-startBot();
+startBot().catch((err) => {
+  console.error('❌ Fatal error:', err);
+  process.exit(1);
+});
+                         
