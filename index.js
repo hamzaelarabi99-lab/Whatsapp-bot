@@ -1,6 +1,9 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import baileys from '@whiskeysockets/baileys';
 import pino from 'pino';
 import fs from 'fs';
+
+const makeWASocket = baileys.default || baileys;
+const { useMultiFileAuthState, DisconnectReason } = baileys;
 
 const BOT_OWNER = '212710530141';
 const DB_FILE = './database.json';
@@ -143,4 +146,3 @@ async function startBot() {
 }
 
 startBot();
-                                       
