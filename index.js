@@ -1,9 +1,7 @@
-import baileys from '@whiskeysockets/baileys';
-import pino from 'pino';
-import fs from 'fs';
-
-const makeWASocket = baileys.default || baileys;
-const { useMultiFileAuthState, DisconnectReason } = baileys;
+const makeWASocket = require('@whiskeysockets/baileys').default;
+const { useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const fs = require('fs');
 
 const BOT_OWNER = '212710530141';
 const DB_FILE = './database.json';
