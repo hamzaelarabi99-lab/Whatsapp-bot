@@ -1,5 +1,4 @@
 import fs from 'fs';
-import readline from 'readline';
 import pino from 'pino';
 import makeWASocket, {
   Browsers,
@@ -11,13 +10,6 @@ import { Boom } from '@hapi/boom';
 const DB_FILE = './database.json';
 const AUTH_DIR = './auth_info_baileys';
 const DEFAULT_PHONE = '212710530141';
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
-const question = (q) => new Promise((resolve) => rl.question(q, resolve));
 
 function loadDB() {
   try {
@@ -164,14 +156,17 @@ async function startBot() {
     if (qr && !state.creds.registered && !pairingRequested) {
       pairingRequested = true;
       try {
-        let phone = DEFAULT_PHONE;
-        console.log(`\n📱 رقم واتساب المضبوط للبوت: +${phone}`);
-        const customPhone = await question('إذا بغيتي تبدل الرقم، دخلو هنا (Enter للاستعمال ديال +212710530141): ');
-        if (customPhone.trim()) phone = customPhone.replace(/\D/g, '');
+        // Railway has no interactive terminal, so do NOT use readline here.
+        // The phone number is taken from the PHONE_NUMBER environment variable
+        // or falls back to the number configured in the source code.
+        const phone = (process.env.PHONE_NUMBER || DEFAULT_PHONE).replace(/\D/g, '');
 
-        if (!phone) {
-          throw new Error('رقم الهاتف غير صالح.');
+        if (!phone || phone.length < 10) {
+          throw new Error('PHONE_NUMBER غير صالح. استعمل الصيغة الدولية بدون + أو مسافات، مثال: 212710530141');
         }
+
+        console.log(`\n📱 رقم واتساب للبوت: +${phone}`);
+        console.log('⏳ جاري إنشاء Pairing Code...');
 
         const code = await sock.requestPairingCode(phone);
         console.log('\n🔐 كود الربط مع واتساب:', code);
@@ -346,4 +341,4 @@ startBot().catch((err) => {
   console.error('❌ Fatal error:', err);
   process.exit(1);
 });
-                         
+          
