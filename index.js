@@ -138,7 +138,7 @@ async function startBot() {
 
   const sock = makeWASocket({
     auth: state,
-    browser: Browsers.ubuntu('Coupe Point Bot'),
+    browser: Browsers.ubuntu('Chrome'),
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
     markOnlineOnConnect: false,
@@ -148,33 +148,36 @@ async function startBot() {
   sock.ev.on('creds.update', saveCreds);
 
   let pairingRequested = state.creds.registered;
+  let pairingTimer = null;
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // No QR is displayed. A WhatsApp pairing code is requested instead.
-    if (qr && !state.creds.registered && !pairingRequested) {
+    // No QR is displayed. Request the pairing code only after the socket
+    // reaches the connecting state (or emits the QR reference). This avoids
+    // timing-related dead/invalid pairing codes on WhatsApp.
+    if ((connection === 'connecting' || qr) && !state.creds.registered && !pairingRequested) {
       pairingRequested = true;
-      try {
-        // Railway has no interactive terminal, so do NOT use readline here.
-        // The phone number is taken from the PHONE_NUMBER environment variable
-        // or falls back to the number configured in the source code.
-        const phone = (process.env.PHONE_NUMBER || DEFAULT_PHONE).replace(/\D/g, '');
+      clearTimeout(pairingTimer);
+      pairingTimer = setTimeout(async () => {
+        try {
+          const phone = (process.env.PHONE_NUMBER || DEFAULT_PHONE).replace(/\D/g, '');
 
-        if (!phone || phone.length < 10) {
-          throw new Error('PHONE_NUMBER غير صالح. استعمل الصيغة الدولية بدون + أو مسافات، مثال: 212710530141');
+          if (!phone || phone.length < 10) {
+            throw new Error('PHONE_NUMBER غير صالح. استعمل الصيغة الدولية بدون + أو مسافات، مثال: 212710530141');
+          }
+
+          console.log(`\n📱 رقم واتساب للبوت: +${phone}`);
+          console.log('⏳ جاري إنشاء Pairing Code...');
+
+          const code = await sock.requestPairingCode(phone);
+          console.log('\n🔐 كود الربط مع واتساب:', code);
+          console.log('📲 واتساب → الأجهزة المرتبطة → ربط جهاز → الربط برقم الهاتف → دخل الكود فوراً.\n');
+        } catch (err) {
+          console.error('❌ تعذر إنشاء كود الربط:', err?.message || err);
+          pairingRequested = false;
         }
-
-        console.log(`\n📱 رقم واتساب للبوت: +${phone}`);
-        console.log('⏳ جاري إنشاء Pairing Code...');
-
-        const code = await sock.requestPairingCode(phone);
-        console.log('\n🔐 كود الربط مع واتساب:', code);
-        console.log('📲 في واتساب: الأجهزة المرتبطة → ربط جهاز → الربط برقم الهاتف، ثم دخل الكود.\n');
-      } catch (err) {
-        console.error('❌ تعذر إنشاء كود الربط:', err?.message || err);
-        pairingRequested = false;
-      }
+      }, 1500);
     }
 
     if (connection === 'open') {
@@ -341,4 +344,4 @@ startBot().catch((err) => {
   console.error('❌ Fatal error:', err);
   process.exit(1);
 });
-          
+                                  
