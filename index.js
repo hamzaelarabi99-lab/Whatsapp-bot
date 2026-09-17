@@ -26,55 +26,50 @@ function getUser(db, jid) {
     return db[jid];
 }
 
-let isPairingRequested = false;
-
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 10000
+        printQRInTerminal: true, // غايطبع ليك QR Code فـ Logs إلا ما تخدمش Pairing Code
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            console.log('📸 سكان الخانة (QR Code) أو تسنى طلب الرقم...');
+        }
 
         if (connection === 'close') {
             const statusCode = (lastDisconnect?.error)?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ انقطع الاتصال، جاري إعادة المحاولة بعد 10 ثوانٍ...');
-            isPairingRequested = false;
+            console.log('❌ انقطع الاتصال، جاري إعادة المحاولة...');
             if (shouldReconnect) {
-                setTimeout(startBot, 10000);
-            }
-        } else if (connection === 'connecting') {
-            console.log('⏳ جاري الاتصال بالسيرفر...');
-            
-            if (!sock.authState.creds.registered && !isPairingRequested) {
-                isPairingRequested = true;
-                setTimeout(async () => {
-                    try {
-                        const code = await sock.requestPairingCode(BOT_OWNER);
-                        console.log(`\n====================================`);
-                        console.log(`📱 الرقم: +${BOT_OWNER}`);
-                        console.log(`🔑 رمز الربط: ${code}`);
-                        console.log(`====================================\n`);
-                    } catch (err) {
-                        console.log('⚠️ خطأ فـ طلب الرمز، كايتسنى المحاولة الجاية...');
-                        isPairingRequested = false;
-                    }
-                }, 10000);
+                setTimeout(startBot, 5000);
             }
         } else if (connection === 'open') {
             console.log('✅ تم الاتصال بالواتساب بنجاح! البوت جاهز ومستقر.');
         }
     });
+
+    // طلب كود الربط مرة واحدة فقط بشكل مباشر
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(BOT_OWNER);
+                console.log(`\n====================================`);
+                console.log(`🔑 رمز الربط الخاص بك: ${code}`);
+                console.log(`====================================\n`);
+            } catch (err) {
+                console.log('⚠️ الواتساب حظر طلب الكود مؤقتاً، استعمل الـ QR Code المطبوع فـ السجل.');
+            }
+        }, 6000);
+    }
 
     // الترحيب بالأعضاء الجدد
     sock.ev.on('group-participants.update', async (update) => {
