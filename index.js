@@ -10,7 +10,7 @@ import { Boom } from '@hapi/boom';
 
 const DB_FILE = './database.json';
 const AUTH_DIR = './auth_info_baileys';
-const DEFAULT_PHONE = '212710530141';
+const DEFAULT_PHONE = '212771007810';
 
 function loadDB() {
   try {
@@ -271,4 +271,4 @@ startBot().catch(err => {
   console.error('❌ خطأ قاتل:', err);
   process.exit(1);
 });
-        
+                             
