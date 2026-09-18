@@ -1,7 +1,6 @@
 import fs from 'fs';
 import pino from 'pino';
 import makeWASocket, {
-  Browsers,
   DisconnectReason,
   useMultiFileAuthState
 } from '@whiskeysockets/baileys';
@@ -17,128 +16,173 @@ function loadDB() {
       fs.writeFileSync(DB_FILE, JSON.stringify({ groups: {} }, null, 2));
     }
     return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-  } catch (err) {
-    console.error('❌ Error reading database.json:', err);
+  } catch {
     return { groups: {} };
   }
 }
 
-function saveDB(db) {
+let db = loadDB();
+
+function saveDB() {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-function ensureGroup(db, groupId) {
-  if (!db.groups[groupId]) {
-    db.groups[groupId] = {
-      users: {}
-    };
-  }
+function getGroup(groupId) {
+  if (!db.groups[groupId]) db.groups[groupId] = { users: {} };
   return db.groups[groupId];
 }
 
-function ensureUser(db, groupId, userId, name = 'عضو') {
-  const group = ensureGroup(db, groupId);
-  if (!group.users[userId]) {
-    group.users[userId] = {
-      name,
-      coupe: 0,
-      point: 0
-    };
-  } else if (name && name !== 'عضو') {
-    group.users[userId].name = name;
+function getUser(groupId, jid, name = '') {
+  const group = getGroup(groupId);
+  if (!group.users[jid]) {
+    group.users[jid] = { name: name || 'Unknown', coupe: 0, point: 0 };
+  } else if (name) {
+    group.users[jid].name = name;
   }
-  return group.users[userId];
+  return group.users[jid];
 }
 
-function getText(message) {
-  return (
-    message?.conversation ||
-    message?.extendedTextMessage?.text ||
-    message?.imageMessage?.caption ||
-    message?.videoMessage?.caption ||
-    ''
-  ).trim();
+function getMentionedJid(msg) {
+  return msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]
+    || msg.message?.imageMessage?.contextInfo?.mentionedJid?.[0]
+    || msg.message?.videoMessage?.contextInfo?.mentionedJid?.[0]
+    || msg.message?.documentMessage?.contextInfo?.mentionedJid?.[0]
+    || null;
 }
 
-function getMentions(message) {
-  return message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+function getText(msg) {
+  return msg.message?.conversation
+    || msg.message?.extendedTextMessage?.text
+    || msg.message?.imageMessage?.caption
+    || msg.message?.videoMessage?.caption
+    || msg.message?.documentMessage?.caption
+    || '';
 }
 
-function getSender(msg) {
-  return msg.key.participant || msg.key.remoteJid;
-}
-
-function getDisplayName(msg, fallback = 'عضو') {
-  return (
-    msg.pushName ||
-    msg.message?.extendedTextMessage?.contextInfo?.participant ||
-    fallback
-  );
-}
-
-function normalizeId(id) {
-  return id ? id.replace(/:\d+(?=@)/, '') : id;
-}
-
-async function isGroupAdmin(sock, groupId, senderId) {
+async function isAdmin(sock, groupId, jid) {
   try {
     const metadata = await sock.groupMetadata(groupId);
-    const sender = normalizeId(senderId);
-    const participant = metadata.participants.find(
-      (p) => normalizeId(p.id) === sender
-    );
-    return participant?.admin === 'admin' || participant?.admin === 'superadmin';
+    const participant = metadata.participants.find(p => p.id === jid);
+    return !!participant &&
+      (participant.admin === 'admin' || participant.admin === 'superadmin');
   } catch {
     return false;
   }
 }
 
-function mentionTag(jid) {
-  return `@${jid.split('@')[0].split(':')[0]}`;
+async function send(sock, jid, text, options = {}) {
+  await sock.sendMessage(jid, { text, ...options });
 }
 
-function formatTop(db, groupId) {
-  const group = ensureGroup(db, groupId);
-  const users = Object.entries(group.users);
+async function handleCommand(sock, msg) {
+  const jid = msg.key.remoteJid;
+  if (!jid || !jid.endsWith('@g.us')) return;
 
-  const coupeTop = [...users]
-    .sort((a, b) => (b[1].coupe || 0) - (a[1].coupe || 0))
-    .slice(0, 10);
+  const text = getText(msg).trim();
+  if (!text.startsWith('!')) return;
 
-  const pointTop = [...users]
-    .sort((a, b) => (b[1].point || 0) - (a[1].point || 0))
-    .slice(0, 10);
+  const parts = text.slice(1).trim().split(/\s+/);
+  const command = (parts.shift() || '').toLowerCase();
+  const sender = msg.key.participant || msg.key.remoteJid;
+  const senderName = msg.pushName || 'عضو';
 
-  let text = '🏆 *المتصدرين*\n\n';
-  text += '👑 *ترتيب الكؤوس:*\n';
+  getUser(jid, sender, senderName);
 
-  if (!coupeTop.length) {
-    text += 'لا يوجد أعضاء بعد.\n';
-  } else {
-    coupeTop.forEach(([jid, user], i) => {
-      text += `${i + 1}. ${user.name || mentionTag(jid)} — 🏆 ${user.coupe || 0}\n`;
-    });
+  if (command === 'coupe') {
+    const user = getUser(jid, sender, senderName);
+    return send(sock, jid, `🏆 ${senderName}\nعندك حالياً: ${user.coupe} كأس`);
   }
 
-  text += '\n⭐ *ترتيب النقاط:*\n';
-
-  if (!pointTop.length) {
-    text += 'لا يوجد أعضاء بعد.\n';
-  } else {
-    pointTop.forEach(([jid, user], i) => {
-      text += `${i + 1}. ${user.name || mentionTag(jid)} — ⭐ ${user.point || 0}\n`;
-    });
+  if (command === 'point') {
+    const user = getUser(jid, sender, senderName);
+    return send(sock, jid, `⭐ ${senderName}\nعندك حالياً: ${user.point} نقطة`);
   }
 
-  return text.trim();
+  if (command === 'setcoupe') {
+    if (!(await isAdmin(sock, jid, sender))) {
+      return send(sock, jid, '❌ هاد الأمر خاص غير بالأدمن.');
+    }
+
+    const target = getMentionedJid(msg);
+    if (!target) {
+      return send(sock, jid, '❌ استعمل: !setcoupe @الشخص');
+    }
+
+    const user = getUser(jid, target);
+    user.coupe += 1;
+    saveDB();
+
+    return send(
+      sock,
+      jid,
+      `🏆 تمت إضافة كأس لـ @${target.split('@')[0]}\nالمجموع: ${user.coupe}`,
+      { mentions: [target] }
+    );
+  }
+
+  if (command === 'setpoint') {
+    if (!(await isAdmin(sock, jid, sender))) {
+      return send(sock, jid, '❌ هاد الأمر خاص غير بالأدمن.');
+    }
+
+    const target = getMentionedJid(msg);
+    const amount = Number(parts[0]);
+
+    if (!target || !Number.isFinite(amount)) {
+      return send(sock, jid, '❌ استعمل: !setpoint @الشخص 10');
+    }
+
+    const user = getUser(jid, target);
+    user.point += amount;
+    saveDB();
+
+    return send(
+      sock,
+      jid,
+      `⭐ تمت إضافة ${amount} نقطة لـ @${target.split('@')[0]}\nالمجموع: ${user.point}`,
+      { mentions: [target] }
+    );
+  }
+
+  if (command === 'top') {
+    const group = getGroup(jid);
+    const users = Object.entries(group.users);
+
+    if (!users.length) {
+      return send(sock, jid, '📊 مازال ما كاين حتى إحصائيات.');
+    }
+
+    const cups = [...users]
+      .sort((a, b) => b[1].coupe - a[1].coupe)
+      .slice(0, 10);
+
+    const points = [...users]
+      .sort((a, b) => b[1].point - a[1].point)
+      .slice(0, 10);
+
+    let out = '🏆 TOP الكؤوس\n';
+    cups.forEach(([id, u], i) => {
+      out += `${i + 1}. ${u.name || id.split('@')[0]} — ${u.coupe} 🏆\n`;
+    });
+
+    out += '\n⭐ TOP النقاط\n';
+    points.forEach(([id, u], i) => {
+      out += `${i + 1}. ${u.name || id.split('@')[0]} — ${u.point} ⭐\n`;
+    });
+
+    return send(sock, jid, out);
+  }
 }
+
+let restarting = false;
+let pairingRequested = false;
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
   const sock = makeWASocket({
     auth: state,
-    browser: Browsers.ubuntu('Chrome'),
+    browser: ['Ubuntu', 'Chrome', '122.0.0.0'],
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
     markOnlineOnConnect: false,
@@ -147,201 +191,131 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  let pairingRequested = state.creds.registered;
-  let pairingTimer = null;
-
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // No QR is displayed. Request the pairing code only after the socket
-    // reaches the connecting state (or emits the QR reference). This avoids
-    // timing-related dead/invalid pairing codes on WhatsApp.
-    if ((connection === 'connecting' || qr) && !state.creds.registered && !pairingRequested) {
+    // Wait for WhatsApp to provide the QR reference, then request the pairing code.
+    if (qr && !state.creds.registered && !pairingRequested) {
       pairingRequested = true;
-      clearTimeout(pairingTimer);
-      pairingTimer = setTimeout(async () => {
-        try {
-          const phone = (process.env.PHONE_NUMBER || DEFAULT_PHONE).replace(/\D/g, '');
 
-          if (!phone || phone.length < 10) {
-            throw new Error('PHONE_NUMBER غير صالح. استعمل الصيغة الدولية بدون + أو مسافات، مثال: 212710530141');
-          }
+      try {
+        const phone = (process.env.PHONE_NUMBER || DEFAULT_PHONE).replace(/\D/g, '');
 
-          console.log(`\n📱 رقم واتساب للبوت: +${phone}`);
-          console.log('⏳ جاري إنشاء Pairing Code...');
-
-          const code = await sock.requestPairingCode(phone);
-          console.log('\n🔐 كود الربط مع واتساب:', code);
-          console.log('📲 واتساب → الأجهزة المرتبطة → ربط جهاز → الربط برقم الهاتف → دخل الكود فوراً.\n');
-        } catch (err) {
-          console.error('❌ تعذر إنشاء كود الربط:', err?.message || err);
-          pairingRequested = false;
+        if (!phone || phone.length < 10) {
+          throw new Error(
+            'PHONE_NUMBER غير صالح. استعمل الرقم الدولي بدون + أو مسافات، مثال: 212710530141'
+          );
         }
-      }, 1500);
+
+        console.log(`📱 رقم واتساب للبوت: +${phone}`);
+        console.log('⏳ جاري إنشاء Pairing Code...');
+
+        const code = await sock.requestPairingCode(phone);
+
+        console.log(`🔐 كود الربط مع واتساب: ${code}`);
+        console.log(
+          '📲 واتساب → الأجهزة المرتبطة → ربط جهاز → الربط برقم الهاتف → دخل الكود فوراً.'
+        );
+      } catch (err) {
+        pairingRequested = false;
+        console.error('❌ تعذر إنشاء كود الربط:', err?.message || err);
+      }
     }
 
     if (connection === 'open') {
       console.log('✅ البوت متصل بواتساب بنجاح!');
+      pairingRequested = true;
     }
 
     if (connection === 'close') {
-      const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const statusCode =
+        new Boom(lastDisconnect?.error)?.output?.statusCode;
 
-      console.log(
-        `⚠️ الاتصال تسد. إعادة الاتصال: ${shouldReconnect ? 'نعم' : 'لا'}`
+      console.error('❌ CONNECTION CLOSED');
+      console.error('🔢 Status code:', statusCode ?? 'unknown');
+      console.error(
+        '📄 Error:',
+        lastDisconnect?.error?.message || lastDisconnect?.error || 'unknown'
       );
 
-      if (shouldReconnect) {
-        setTimeout(startBot, 3000);
-      } else {
-        console.log('🔒 تم تسجيل الخروج. احذف مجلد auth_info_baileys إذا أردت ربط رقم جديد.');
+      const loggedOut =
+        statusCode === DisconnectReason.loggedOut || statusCode === 401;
+
+      if (loggedOut) {
+        if (!restarting) {
+          restarting = true;
+
+          try {
+            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+            console.log('🧹 تم حذف جلسة auth القديمة بعد loggedOut/401.');
+            console.log('🔄 غادي نعاود نبدأ جلسة Pairing جديدة مرة واحدة...');
+          } catch (e) {
+            console.error('❌ فشل حذف auth:', e?.message || e);
+          }
+
+          setTimeout(() => {
+            restarting = false;
+            pairingRequested = false;
+            startBot().catch(err => console.error('❌ startBot:', err));
+          }, 2500);
+        } else {
+          console.error('🛑 تم إيقاف إعادة المحاولة لمنع loop لا نهائي.');
+        }
+
+        return;
+      }
+
+      if (!restarting) {
+        restarting = true;
+
+        setTimeout(() => {
+          restarting = false;
+          pairingRequested = false;
+          startBot().catch(err => console.error('❌ startBot:', err));
+        }, 3000);
       }
     }
   });
 
-  // Welcome new members.
   sock.ev.on('group-participants.update', async (update) => {
     if (update.action !== 'add') return;
 
-    try {
-      const mentions = update.participants || [];
-      if (!mentions.length) return;
+    const groupId = update.id;
 
-      const names = mentions.map(mentionTag).join(' و ');
-      await sock.sendMessage(update.id, {
-        text:
-          `🎉 *مرحبا بيك فالمجموعة!*\n\n` +
-          `أهلا ${names} 👋\n` +
-          `🏆 الكؤوس: !coupe\n` +
-          `⭐ النقاط: !point\n` +
-          `🏅 المتصدرين: !top`,
-        mentions
-      });
+    for (const participant of update.participants) {
+      const name = participant.split('@')[0];
+      getUser(groupId, participant, name);
 
-      const db = loadDB();
-      for (const jid of mentions) {
-        ensureUser(db, update.id, jid, 'عضو');
+      try {
+        await sock.sendMessage(groupId, {
+          text: `👋 مرحباً @${name}!\n🎉 مرحبا بك فالمجموعة!`,
+          mentions: [participant]
+        });
+      } catch (e) {
+        console.error('❌ welcome error:', e?.message || e);
       }
-      saveDB(db);
-    } catch (err) {
-      console.error('❌ Welcome error:', err?.message || err);
     }
+
+    saveDB();
   });
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+
     for (const msg of messages) {
+      if (msg.key.fromMe) continue;
+
       try {
-        if (!msg.message || msg.key.fromMe) continue;
-
-        const jid = msg.key.remoteJid;
-        if (!jid || !jid.endsWith('@g.us')) continue;
-
-        const text = getText(msg);
-        if (!text.startsWith('!')) continue;
-
-        const parts = text.split(/\s+/);
-        const command = parts[0].toLowerCase();
-        const mentions = getMentions(msg);
-        const sender = getSender(msg);
-
-        const db = loadDB();
-
-        // !coupe
-        if (command === '!coupe') {
-          const user = ensureUser(db, jid, sender, msg.pushName || 'عضو');
-          saveDB(db);
-
-          await sock.sendMessage(jid, {
-            text: `🏆 ${user.name || mentionTag(sender)} عندو *${user.coupe || 0}* كؤوس.`,
-            mentions: [sender]
-          }, { quoted: msg });
-
-          continue;
-        }
-
-        // !point
-        if (command === '!point') {
-          const user = ensureUser(db, jid, sender, msg.pushName || 'عضو');
-          saveDB(db);
-
-          await sock.sendMessage(jid, {
-            text: `⭐ ${user.name || mentionTag(sender)} عندو *${user.point || 0}* نقطة.`,
-            mentions: [sender]
-          }, { quoted: msg });
-
-          continue;
-        }
-
-        // !top
-        if (command === '!top') {
-          await sock.sendMessage(jid, {
-            text: formatTop(db, jid)
-          }, { quoted: msg });
-
-          continue;
-        }
-
-        // Admin-only commands
-        if (command === '!setcoupe' || command === '!setpoint') {
-          const admin = await isGroupAdmin(sock, jid, sender);
-          if (!admin) {
-            await sock.sendMessage(jid, {
-              text: '⛔ هاد الأمر غير متاح غير لأدمن المجموعة.'
-            }, { quoted: msg });
-            continue;
-          }
-
-          if (!mentions.length) {
-            await sock.sendMessage(jid, {
-              text:
-                command === '!setcoupe'
-                  ? '❌ منشن الشخص مع الأمر: !setcoupe @الشخص'
-                  : '❌ منشن الشخص والكمية: !setpoint @الشخص 50'
-            }, { quoted: msg });
-            continue;
-          }
-
-          const target = mentions[0];
-          const user = ensureUser(db, jid, target, 'عضو');
-
-          if (command === '!setcoupe') {
-            user.coupe = (user.coupe || 0) + 1;
-            saveDB(db);
-
-            await sock.sendMessage(jid, {
-              text: `🏆 تمت إضافة *كأس واحد* إلى ${mentionTag(target)}.\nالمجموع: *${user.coupe}* كؤوس.`,
-              mentions: [target]
-            }, { quoted: msg });
-          } else {
-            const amount = Number(parts.find((p) => /^\d+$/.test(p)));
-            if (!Number.isInteger(amount) || amount <= 0) {
-              await sock.sendMessage(jid, {
-                text: '❌ مثال صحيح: !setpoint @الشخص 50'
-              }, { quoted: msg });
-              continue;
-            }
-
-            user.point = (user.point || 0) + amount;
-            saveDB(db);
-
-            await sock.sendMessage(jid, {
-              text: `⭐ تمت إضافة *${amount} نقطة* إلى ${mentionTag(target)}.\nالمجموع: *${user.point}* نقطة.`,
-              mentions: [target]
-            }, { quoted: msg });
-          }
-
-          continue;
-        }
-      } catch (err) {
-        console.error('❌ Message handler error:', err?.message || err);
+        await handleCommand(sock, msg);
+      } catch (e) {
+        console.error('❌ command error:', e?.message || e);
       }
     }
   });
 }
 
-startBot().catch((err) => {
+startBot().catch(err => {
   console.error('❌ Fatal error:', err);
   process.exit(1);
 });
-                                  
+    
