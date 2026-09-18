@@ -86,12 +86,14 @@ async function startBot() {
 
   const sockOptions = {
     auth: state,
-    browser: Browsers.ubuntu('Chrome'),
+    browser: ['Ubuntu', 'Chrome', '122.0.0.0'],
     printQRInTerminal: false,
-    logger: pino({ level: 'silent' }),
+    logger: pino({ level: process.env.LOG_LEVEL || 'info' }),
     markOnlineOnConnect: false,
     syncFullHistory: false,
-    connectTimeoutMs: 60000
+    connectTimeoutMs: 120000,
+    keepAliveIntervalMs: 10000,
+    defaultQueryTimeoutMs: undefined
   };
 
   if (waVersion) sockOptions.version = waVersion;
@@ -104,6 +106,8 @@ async function startBot() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
+
+    console.log(`🔄 connection.update: connection=${connection || '—'} qr=${qr ? 'yes' : 'no'}`);
 
     if ((connection === 'connecting' || qr) && !state.creds.registered && !pairingRequested) {
       pairingRequested = true;
@@ -123,7 +127,7 @@ async function startBot() {
           console.error('❌ تعذر إنشاء كود الربط:', err?.message || err);
           pairingRequested = false;
         }
-      }, 2000);
+      }, 3000);
     }
 
     if (connection === 'open') {
@@ -134,10 +138,11 @@ async function startBot() {
       const boom = new Boom(lastDisconnect?.error);
       const statusCode = boom.output?.statusCode;
       console.log(`⚠️ الاتصال تسد. statusCode: ${statusCode ?? 'غير معروف'}`);
+      console.log(`⚠️ disconnect error: ${lastDisconnect?.error?.message || 'غير معروف'}`);
       console.log(`⚠️ إعادة الاتصال: ${statusCode !== DisconnectReason.loggedOut ? 'نعم' : 'لا'}`);
 
       if (statusCode === DisconnectReason.loggedOut) {
-        console.log('🔒 تم تسجيل الخروج. احذف مجلد auth_info_baileys إذا أردت ربط رقم جديد.');
+        console.log('🔒 تم تسجيل الخروج. هاد الجلسة غير صالحة. خاص auth state جديد قبل محاولة Pairing أخرى.');
         return;
       }
 
@@ -271,4 +276,4 @@ startBot().catch(err => {
   console.error('❌ خطأ قاتل:', err);
   process.exit(1);
 });
-                             
+      
