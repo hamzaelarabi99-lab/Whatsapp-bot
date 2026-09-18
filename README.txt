@@ -1,20 +1,28 @@
-WhatsApp Coupe & Point Bot - Railway Pairing Code
+# WhatsApp Coupe & Point Bot — Pairing v3
 
-هذه النسخة مهيأة لـ Railway ولا تستعمل QR أو readline.
+## Railway
+1. Replace `index.js`, `package.json`, and `database.json`.
+2. Redeploy.
+3. Open Deploy -> Logs.
+4. Wait for:
+   `🔐 كود الربط مع واتساب: XXXXXXXX`
+5. WhatsApp -> الأجهزة المرتبطة -> ربط جهاز -> الربط برقم الهاتف.
+6. Enter the NEW code immediately.
 
-رقم واتساب الافتراضي:
-+212710530141
+## Important
+- Pairing code only; no QR is used.
+- PHONE_NUMBER can be set as a Railway variable using digits only, e.g. `212710530141`.
+- On 401/loggedOut, the bot removes the old auth folder and makes one clean retry.
+- Logs now show the exact disconnect status code.
 
-الربط:
-1) Deploy / Redeploy المشروع في Railway.
-2) افتح Deploy -> Logs.
-3) انتظر حتى يظهر Pairing Code جديد.
-4) في واتساب على الرقم +212710530141:
-   الإعدادات -> الأجهزة المرتبطة -> ربط جهاز -> الربط برقم الهاتف.
-5) أدخل الكود فوراً.
+## Commands
+!coupe
+!point
+!top
+!setcoupe @person
+!setpoint @person amount
 
-مهم:
-- لا تدخل + أو مسافات في PHONE_NUMBER إذا أضفته كـ Variable؛ استعمل 212710530141.
-- لا تستعمل كوداً قديماً من Logs. كل مرة أعدت تشغيل البوت قد يظهر كود جديد.
-- استعمل الكود الجديد فور ظهوره.
-- إذا فشل كود، أعد Deploy وانتظر كوداً جديداً ولا تعاود إدخال الكود القديم.
+`setcoupe` and `setpoint` require group-admin privileges.
+
+## Data
+Cups and points are stored in `database.json`.
